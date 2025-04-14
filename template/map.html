@@ -1,0 +1,311 @@
+
+
+
+
+{% extends "base.html" %}
+{% load static %}
+
+{% block main %}
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Project Map Viewer</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+    <style>
+        #map { height: 600px; width: 100%; }
+        select { margin: 10px 0; padding: 5px; width: 100%; }
+        .dropdown-container { margin-bottom: 15px; }
+        .info-panel { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 0 10px rgba(0,0,0,0.1); 
+        }
+        label { font-weight: bold; margin-bottom: 5px; display: block; }
+        .location-info { margin-top: 20px; }
+        .location-info p { margin: 5px 0; }
+    </style>
+</head>
+
+<body>
+<div class="container-fluid mt-4">
+    <div class="row">
+        <!-- Dropdowns Column -->
+        <div class="col-md-3">
+            <div class="info-panel">
+                <h4 class="mb-3">Location Selection</h4>
+
+                <div class="dropdown-container">
+                    <label for="projectDropdown">Project:</label>
+                    <select id="projectDropdown">
+                        <option value="">Select Project</option>
+                        {% for project in projects %}
+                            <option value="{{ project.id }}">{{ project.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="dropdown-container">
+                    <label for="districtDropdown">District:</label>
+                    <select id="districtDropdown">
+                        <option value="">Select District</option>
+                        {% for district in districts %}
+                            <option value="{{ district.id }}">{{ district.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="dropdown-container">
+                    <label for="tahsilDropdown">Tahsil:</label>
+                    <select id="tahsilDropdown" disabled>
+                        <option value="">Select Tahsil</option>
+                    </select>
+                </div>
+
+                <div class="dropdown-container">
+                    <label for="villageDropdown">Village:</label>
+                    <select id="villageDropdown" disabled>
+                        <option value="">Select Village</option>
+                    </select>
+                </div>
+
+                <div class="location-info">
+                    <h5>Selected Location</h5>
+                    <p><strong>District:</strong> <span id="districtText">-</span></p>
+                    <p><strong>Tahsil:</strong> <span id="tahsilText">-</span></p>
+                    <p><strong>Village:</strong> <span id="villageText">-</span></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map Column -->
+        <div class="col-md-9">
+            <div id="map"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Keep your existing scripts below -->
+<script>
+
+// Initialize the map
+var map = L.map('map').setView([19.7515, 75.7139], 7);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Variables to store map layers
+        let currentHighlightLayer = null;
+        let projectMarker = null;
+        let projectPolygon = null;
+
+        // Function to clear all highlights from the map
+        function clearHighlights() {
+            if (currentHighlightLayer) {
+                map.removeLayer(currentHighlightLayer);
+                currentHighlightLayer = null;
+            }
+            if (projectMarker) {
+                map.removeLayer(projectMarker);
+                projectMarker = null;
+            }
+            if (projectPolygon) {
+                map.removeLayer(projectPolygon);
+                projectPolygon = null;
+            }
+        }
+
+
+
+
+
+        $('#projectDropdown').change(function () {
+    const projectId = $(this).val();
+
+    clearHighlights();
+
+    if (projectId) {
+        $.get('/get_project_by_id/' + projectId + '/', function (project) {
+            if (project) {
+                // Set dropdowns to match project location
+                $('#districtText').text(project.district);
+                $('#tahsilText').text(project.tahsil);
+                $('#villageText').text(project.village);
+
+                // Add project marker
+                projectMarker = L.marker([project.latitude, project.longitude])
+                    .addTo(map)
+                    .bindPopup(`<b>Project:</b> ${project.name}`)
+                    .openPopup();
+
+                // Add polygon highlight
+                if (project.polygon_data) {
+                    projectPolygon = L.geoJSON(project.polygon_data, {
+                        style: {
+                            color: '#7030A0',
+                            fillColor: '#B4A7D6',
+                            fillOpacity: 0.5,
+                            weight: 2
+                        }
+                    }).addTo(map);
+                    map.fitBounds(projectPolygon.getBounds());
+                }
+            }
+        });
+    } else {
+        $('#districtText, #tahsilText, #villageText').text('-');
+    }
+});
+
+
+       // District dropdown change handler
+$('#districtDropdown').change(function() {
+    const districtId = $(this).val();
+    
+    // Reset dependent dropdowns
+    $('#tahsilDropdown').empty().append('<option value="">Select Tahsil</option>').prop('disabled', !districtId);
+    $('#villageDropdown').empty().append('<option value="">Select Village</option>').prop('disabled', true);
+    
+    // Clear location info
+    $('#districtText, #tahsilText, #villageText').text('-');
+    
+    // Clear map highlights
+    clearHighlights();
+    
+    if (districtId) {
+        // Fetch tahsils for the selected district (including boundary data)
+        $.get('/get_tahsils/' + districtId + '/', function(tahsils) {
+            tahsils.forEach(function(tahsil) {
+                $('#tahsilDropdown').append(`<option value="${tahsil.id}">${tahsil.name}</option>`);
+            });
+            $('#tahsilDropdown').prop('disabled', false);
+            
+            // Highlight the district on the map using first tahsil's boundary
+            if (tahsils.length > 0 && tahsils[0].boundary) {
+                currentHighlightLayer = L.geoJSON(tahsils[0].boundary, {
+                    style: {
+                        color: '#FF0000',
+                        fillColor: '#FF9999',
+                        fillOpacity: 0.3,
+                        weight: 3
+                    }
+                }).addTo(map);
+                map.fitBounds(currentHighlightLayer.getBounds());
+            }
+        });
+    }
+});
+
+   // Tahsil dropdown change handler
+$('#tahsilDropdown').change(function() {
+    const tahsilId = $(this).val();
+    
+    // Reset village dropdown
+    $('#villageDropdown').empty().append('<option value="">Select Village</option>').prop('disabled', !tahsilId);
+    
+    // Clear village info
+    $('#tahsilText, #villageText').text('-');
+    
+    // Clear map highlights
+    clearHighlights();
+    
+    if (tahsilId) {
+        // Fetch villages for the selected tahsil (including boundary data)
+        $.get('/get_villages/' + tahsilId + '/', function(villages) {
+            villages.forEach(function(village) {
+                $('#villageDropdown').append(`<option value="${village.id}">${village.name}</option>`);
+            });
+            $('#villageDropdown').prop('disabled', false);
+            
+            // Find and highlight the selected tahsil's boundary
+            const selectedTahsil = tahsils.find(t => t.id == tahsilId);
+            if (selectedTahsil && selectedTahsil.boundary) {
+                currentHighlightLayer = L.geoJSON(selectedTahsil.boundary, {
+                    style: {
+                        color: '#00AA00',
+                        fillColor: '#99FF99',
+                        fillOpacity: 0.3,
+                        weight: 3
+                    }
+                }).addTo(map);
+                map.fitBounds(currentHighlightLayer.getBounds());
+            }
+        });
+    }
+});
+
+        // Village dropdown change handler
+        $('#villageDropdown').change(function() {
+            const villageId = $(this).val();
+            
+            // Clear map highlights
+            clearHighlights();
+            
+            if (villageId) {
+                // Fetch village details
+                $.get('/get_villages/' + $('#tahsilDropdown').val() + '/', function(villages) {
+                    const selectedVillage = villages.find(v => v.id == villageId);
+                    
+                    if (selectedVillage) {
+                        // Update location info
+                        $('#districtText').text($('#districtDropdown option:selected').text());
+                        $('#tahsilText').text($('#tahsilDropdown option:selected').text());
+                        $('#villageText').text(selectedVillage.name);
+                        
+                        // Highlight the village on the map
+                        if (selectedVillage.boundary) {
+                            currentHighlightLayer = L.geoJSON(selectedVillage.boundary, {
+                                style: {
+                                    color: '#0000FF',
+                                    fillColor: '#9999FF',
+                                    fillOpacity: 0.3,
+                                    weight: 3
+                                },
+                                onEachFeature: function(feature, layer) {
+                                    layer.bindPopup(`<b>${selectedVillage.name}</b><br>
+                                        Tahsil: ${$('#tahsilDropdown option:selected').text()}<br>
+                                        District: ${$('#districtDropdown option:selected').text()}`);
+                                    layer.openPopup();
+                                }
+                            }).addTo(map);
+                            map.fitBounds(currentHighlightLayer.getBounds());
+                        }
+                        
+                        // Check if there's a project for this village
+                        $.get('/get_project/' + villageId + '/', function(project) {
+                            if (project) {
+                                // Add project marker
+                                projectMarker = L.marker([project.latitude, project.longitude])
+                                    .addTo(map)
+                                    .bindPopup(`<b>Project:</b> ${project.name}`);
+                                
+                                // Add project polygon if available
+                                if (project.polygon_data) {
+                                    projectPolygon = L.geoJSON(project.polygon_data, {
+                                        style: {
+                                            color: '#7030A0',
+                                            fillColor: '#B4A7D6',
+                                            fillOpacity: 0.5,
+                                            weight: 2
+                                        }
+                                    }).addTo(map);
+                                }
+                            }
+                        });
+                    }
+                });
+            } else {
+                $('#villageText').text('-');
+            }
+        });
+</script>
+
+</body>
+</html>
+
+{% endblock main %}
